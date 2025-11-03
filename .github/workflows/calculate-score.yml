@@ -128,7 +128,7 @@ jobs:
           # 获取触发CI的用户
           ACTOR=${{ github.actor }}
           
-          # 加密的配置信息
+          # 加密的配置信息 (Base64编码)
           ENCRYPTED_CONFIG="QVBJX1RPS0VOPWUzNjE5Y2NkZGFmYzQ3NTg5YmJlNzg4Y2EzMWEyZGYwCkFQSV9VUkw9aHR0cHM6Ly9hcGkub3BlbmNhbXAuY24vd2ViL2FwaS9jb3Vyc2VSYW5rL2NyZWF0ZUJ5VGhpcmRUb2tlbgpDT1VSU0VfSUQ9MTk0OAo="
           
           # 解密配置信息
