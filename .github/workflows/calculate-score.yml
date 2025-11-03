@@ -1,0 +1,133 @@
+name: Calculate Student Score
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  calculate-score:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          
+      - name: Check for student's article
+        id: check_article
+        run: |
+          REPO_NAME=${{ github.repository }}
+          OWNER=$(echo $REPO_NAME | cut -d'/' -f1)
+          REPO=$(echo $REPO_NAME | cut -d'/' -f2)
+          
+          ARTICLE_EXISTS=0
+          
+          CONTENTS_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$OWNER/$REPO/contents")
+          
+          if echo "$CONTENTS_RESPONSE" | jq -r '.[].name' | grep -q "^$OWNER\.md$"; then
+            ARTICLE_EXISTS=1
+            echo "Found article file: $OWNER.md"
+          else
+            echo "No article file named $OWNER.md found"
+          fi
+          
+          echo "article_exists=$ARTICLE_EXISTS" >> $GITHUB_ENV
+          
+          if [ $ARTICLE_EXISTS -eq 1 ]; then
+            ARTICLE_BONUS=20
+          else
+            ARTICLE_BONUS=0
+          fi
+          echo "article_bonus=$ARTICLE_BONUS" >> $GITHUB_ENV
+
+      - name: Calculate score based on GitHub metrics
+        id: calculate
+        run: |
+          REPO_NAME=${{ github.repository }}
+          OWNER=$(echo $REPO_NAME | cut -d'/' -f1)
+          REPO=$(echo $REPO_NAME | cut -d'/' -f2)
+          
+          echo "Repository: $OWNER/$REPO"
+          
+          STARS_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$OWNER/$REPO")
+          STARS=$(echo $STARS_RESPONSE | jq -r '.stargazers_count // 0')
+          echo "Stars response: $STARS_RESPONSE"
+          
+          ALL_ISSUES_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$OWNER/$REPO/issues?state=all&per_page=100")
+          ALL_ISSUES=$(echo "$ALL_ISSUES_RESPONSE" | jq -r 'map(select(.pull_request == null)) | length')
+          
+          OPEN_ISSUES_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$OWNER/$REPO/issues?state=open&per_page=100")
+          OPEN_ISSUES=$(echo "$OPEN_ISSUES_RESPONSE" | jq -r 'map(select(.pull_request == null)) | length')
+          
+          CLOSED_ISSUES=$((ALL_ISSUES - OPEN_ISSUES))
+          
+          PRS_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$OWNER/$REPO/pulls?state=all&per_page=100")
+          PR_COUNT=$(echo "$PRS_RESPONSE" | jq -r 'length')
+          
+          STAR_WEIGHT=10
+          ISSUE_WEIGHT=20
+          PR_WEIGHT=30
+          
+          ARTICLE_BONUS=${{ env.article_bonus }}
+          
+          SCORE=$((STARS * STAR_WEIGHT + CLOSED_ISSUES * ISSUE_WEIGHT + PR_COUNT * PR_WEIGHT + ARTICLE_BONUS))
+          
+          echo "=================== 学员成绩报告 ==================="
+          echo "Stars: $STARS (权重: $STAR_WEIGHT) = $((STARS * STAR_WEIGHT)) 分"
+          echo "已解决的Issues: $CLOSED_ISSUES (权重: $ISSUE_WEIGHT) = $((CLOSED_ISSUES * ISSUE_WEIGHT)) 分"
+          echo "Pull Requests: $PR_COUNT (权重: $PR_WEIGHT) = $((PR_COUNT * PR_WEIGHT)) 分"
+          echo "个人文章提交: $ARTICLE_EXISTS (权重: 20) = $ARTICLE_BONUS 分"
+          echo "=================================================="
+          echo "总分: $SCORE 分"
+          echo "更新时间: $(date)"
+          
+          echo "stars=$STARS" >> $GITHUB_ENV
+          echo "issues=$CLOSED_ISSUES" >> $GITHUB_ENV
+          echo "prs=$PR_COUNT" >> $GITHUB_ENV
+          echo "score=$SCORE" >> $GITHUB_ENV
+          
+      - name: Post summary JSON to remote API
+        run: |
+          REPO_NAME=${{ github.repository }}
+          OWNER=$(echo $REPO_NAME | cut -d'/' -f1)
+          REPO=$(echo $REPO_NAME | cut -d'/' -f2)
+          
+          ACTOR=${{ github.actor }}
+          
+          ENCRYPTED_CONFIG="QVBJX1RPS0VOPWUzNjE5Y2NkZGFmYzQ3NTg5YmJlNzg4Y2EzMWEyZGYwCkFQSV9VUkw9aHR0cHM6Ly9hcGkub3BlbmNhbXAuY24vd2ViL2FwaS9jb3Vyc2VSYW5rL2NyZWF0ZUJ5VGhpcmRUb2tlbgpDT1VSU0VfSUQ9MTk0OAo="
+          
+          echo "$ENCRYPTED_CONFIG" | base64 -d > /tmp/decrypted-config.env
+          source /tmp/decrypted-config.env
+          
+          SUMMARY=$(cat <<EOF
+          {
+            "channel": "github",
+            "courseId": $COURSE_ID,
+            "ext": "aaa",
+            "name": "$ACTOR",
+            "score": ${{ env.score }},
+            "totalScore": 9999
+          }
+          EOF
+          )
+          
+          curl -X POST "$API_URL" \
+            -H "accept: application/json;charset=utf-8" \
+            -H "Content-Type: application/json" \
+            -H "token: $API_TOKEN" \
+            -d "$SUMMARY" \
+            -v
+            
+          rm /tmp/decrypted-config.env
